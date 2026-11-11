@@ -5,7 +5,9 @@ import { decodeWatched, sortedVideoIds, type CinemetaVideo } from "./bitfield.ts
 import { Stremio, cinemeta, type LibraryItem } from "./stremio.ts";
 import type { Store } from "./store.ts";
 
-const CATALOG_ID = "watching";
+/** Started series with unwatched episodes / library series not started yet. */
+const CATALOG_STARTED = "watching";
+const CATALOG_UNSTARTED = "unstarted";
 /** Episode lists are re-fetched from Cinemeta after this long. */
 const EPISODES_TTL = 6 * 60 * 60 * 1000;
 /** Cinemeta fetches per catalog request (Cloudflare free plan: 50 subrequests). */
@@ -48,12 +50,15 @@ function plural(n: number): string {
 
 const manifest = {
   id: "community.stremio.watching-shelf",
-  version: "3.0.0",
+  version: "3.1.0",
   name: "Я смотрю",
   description: "Сериалы из библиотеки с непросмотренными сериями и их числом",
   resources: ["catalog"],
   types: ["series"],
-  catalogs: [{ type: "series", id: CATALOG_ID, name: "Я смотрю" }],
+  catalogs: [
+    { type: "series", id: CATALOG_STARTED, name: "Я смотрю" },
+    { type: "series", id: CATALOG_UNSTARTED, name: "Не начато" },
+  ],
 };
 
 export function toEpisodes(meta: { videos?: CinemetaVideo[] }): [number, number, number][] {
@@ -135,7 +140,8 @@ export async function handleAddon(
   }
 
   const m = path.match(/^\/catalog\/series\/([^/]+?)(?:\/([^/]+))?\.json$/);
-  if (!m || m[1] !== CATALOG_ID || !authKey) return json({ metas: [] });
+  if (!m || (m[1] !== CATALOG_STARTED && m[1] !== CATALOG_UNSTARTED) || !authKey) return json({ metas: [] });
+  const wantStarted = m[1] === CATALOG_STARTED;
   if (Number(new URLSearchParams(m[2] ?? "").get("skip") ?? 0) > 0) return json({ metas: [] }, 60);
 
   let library: LibraryItem[];
@@ -152,7 +158,7 @@ export async function handleAddon(
 
   const rows = (
     await Promise.all(library.filter((i) => cache[i._id]).map((i) => countUnwatched(i, cache[i._id].v)))
-  ).filter((r): r is Row => !!r);
+  ).filter((r): r is Row => !!r && r.started === wantStarted);
   rows.sort((a, b) => b.sortKey - a.sortKey);
 
   const metas = rows.map(({ item, unwatched, total, started }) => ({
