@@ -41,7 +41,7 @@ function plural(n: number): string {
 
 const manifest = {
   id: "community.stremio.watching-shelf",
-  version: "2.1.0",
+  version: "3.0.0",
   name: "Я смотрю",
   description: "Сериалы из библиотеки с непросмотренными сериями и их числом",
   resources: ["catalog"],
@@ -109,17 +109,34 @@ async function countUnwatched(item: LibraryItem, eps: [number, number, number][]
   };
 }
 
-/** Handles /addon/<key>/... paths (after the secret has been checked). */
-export async function handleAddon(path: string, store: Store, ctx: ExecutionContext, base: string): Promise<Response> {
-  if (path === "/manifest.json") return json(manifest, 3600);
+/**
+ * Handles add-on paths (`/manifest.json`, `/catalog/...`) for one Stremio account.
+ * `authKey` null = unconfigured public manifest (Stremio then offers "Configure").
+ */
+export async function handleAddon(
+  path: string,
+  authKey: string | null,
+  store: Store,
+  ctx: ExecutionContext,
+  posterBase: string,
+): Promise<Response> {
+  if (path === "/manifest.json") {
+    return json(
+      { ...manifest, behaviorHints: { configurable: true, configurationRequired: !authKey } },
+      authKey ? 3600 : 60,
+    );
+  }
 
   const m = path.match(/^\/catalog\/series\/([^/]+?)(?:\/([^/]+))?\.json$/);
-  if (!m || m[1] !== CATALOG_ID) return json({ metas: [] });
+  if (!m || m[1] !== CATALOG_ID || !authKey) return json({ metas: [] });
   if (Number(new URLSearchParams(m[2] ?? "").get("skip") ?? 0) > 0) return json({ metas: [] }, 60);
 
-  const authKey = await store.get<string>("stremio_auth");
-  if (!authKey) return json({ metas: [] });
-  const library = (await new Stremio(authKey).library()).filter((i) => i.type === "series" && !i.removed);
+  let library: LibraryItem[];
+  try {
+    library = (await new Stremio(authKey).library()).filter((i) => i.type === "series" && !i.removed);
+  } catch {
+    return json({ metas: [] }); // expired / invalid key: show an empty shelf instead of an error
+  }
 
   const cache = (await store.get<EpisodeCache>("episodes")) ?? {};
   if (await refreshEpisodes(cache, library.map((i) => i._id), MAX_FETCH)) {
@@ -136,7 +153,7 @@ export async function handleAddon(path: string, store: Store, ctx: ExecutionCont
     type: "series",
     name: started ? `${item.name} · ${plural(unwatched)}` : `${item.name} · не начат`,
     // started series get a poster with the unwatched count drawn on it (see shelf-worker)
-    poster: started ? `${base}/poster/${BADGE_VERSION}/${item._id}/${unwatched}.jpg` : posterUrl(item._id),
+    poster: started ? `${posterBase}/poster/${BADGE_VERSION}/${item._id}/${unwatched}.jpg` : posterUrl(item._id),
     posterShape: "poster",
     description: started ? `Не просмотрено ${unwatched} из ${total} вышедших серий` : `Ещё не начат, вышло серий: ${total}`,
   }));

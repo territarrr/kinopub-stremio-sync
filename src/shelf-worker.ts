@@ -1,12 +1,19 @@
 // Standalone Worker for the "Я смотрю" Stremio add-on (see src/shelf.ts).
-// URLs: /<SHELF_KEY>/manifest.json, /<SHELF_KEY>/catalog/series/watching.json,
-//       /<SHELF_KEY>/poster/<version>/<imdb>/<count>.jpg (poster with the count badge)
+//
+//   /                              setup page: log in with Stremio, get a personal install link
+//   /manifest.json                 unconfigured manifest (Stremio shows "Configure")
+//   /u/<token>/manifest.json       personal add-on; <token> = base64url(Stremio authKey)
+//   /u/<token>/catalog/...         the shelf for that account
+//   /poster/<ver>/<imdb>/<n>.jpg   poster with the count badge (public, shared cache)
+//   /<SHELF_KEY>/...               owner's legacy URLs, authKey taken from KV
 import { KVStore } from "./store.ts";
 import { BADGE_VERSION, corsPreflight, handleAddon, posterUrl } from "./shelf.ts";
 import { drawBadge } from "./badge.ts";
+import { stremioLogin } from "./stremio.ts";
+import { configurePage } from "./shelf-page.ts";
 
 interface Env {
-  SHELF: KVNamespace; // keys: stremio_auth, episodes, poster:<imdb>:<count>
+  SHELF: KVNamespace; // keys: stremio_auth (owner), episodes, poster:<ver>:<imdb>:<count>
   SHELF_KEY: string;
 }
 
@@ -14,6 +21,20 @@ const jpegResponse = (body: ArrayBuffer | Uint8Array) =>
   new Response(body as BodyInit, {
     headers: { "Content-Type": "image/jpeg", "Cache-Control": "public, max-age=604800", "Access-Control-Allow-Origin": "*" },
   });
+
+const html = (body: string, status = 200) =>
+  new Response(body, { status, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } });
+
+const b64url = {
+  encode: (s: string) => btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""),
+  decode: (s: string) => {
+    try {
+      return atob(s.replace(/-/g, "+").replace(/_/g, "/"));
+    } catch {
+      return null;
+    }
+  },
+};
 
 async function poster(env: Env, ctx: ExecutionContext, imdb: string, count: number): Promise<Response> {
   const key = `poster:${BADGE_VERSION}:${imdb}:${count}`;
@@ -37,14 +58,43 @@ async function poster(env: Env, ctx: ExecutionContext, imdb: string, count: numb
   }
 }
 
+async function configure(req: Request, origin: string): Promise<Response> {
+  if (req.method !== "POST") return html(configurePage({ origin }));
+  const form = await req.formData();
+  const email = String(form.get("email") ?? "").trim();
+  const password = String(form.get("password") ?? "");
+  try {
+    const authKey = await stremioLogin(email, password);
+    return html(configurePage({ origin, installUrl: `${origin}/u/${b64url.encode(authKey)}/manifest.json` }));
+  } catch {
+    return html(configurePage({ origin, error: "Не получилось войти: проверьте почту и пароль Stremio." }), 400);
+  }
+}
+
 export default {
   async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    const url = new URL(req.url);
-    const m = url.pathname.match(/^\/([^/]+)(\/.*)$/);
-    if (!m || !env.SHELF_KEY || m[1] !== env.SHELF_KEY) return new Response("Not found", { status: 404 });
     if (req.method === "OPTIONS") return corsPreflight();
-    const p = m[2].match(/^\/poster\/(?:(v\d+)\/)?(tt\d+)\/(\d+)\.jpg$/);
+    const url = new URL(req.url);
+    const path = url.pathname;
+    const store = new KVStore(env.SHELF);
+
+    const p = path.match(/^(?:\/[^/]+)?\/poster\/(?:(v\d+)\/)?(tt\d+)\/(\d+)\.jpg$/);
     if (p) return poster(env, ctx, p[2], Number(p[3]));
-    return handleAddon(m[2], new KVStore(env.SHELF), ctx, `${url.origin}/${env.SHELF_KEY}`);
+
+    if (path === "/" || path === "/configure" || /^\/u\/[^/]+\/configure$/.test(path)) return configure(req, url.origin);
+    if (path === "/manifest.json") return handleAddon(path, null, store, ctx, url.origin);
+
+    const personal = path.match(/^\/u\/([A-Za-z0-9_-]+)(\/.*)$/);
+    if (personal) {
+      const authKey = b64url.decode(personal[1]);
+      if (!authKey) return new Response("Not found", { status: 404 });
+      return handleAddon(personal[2], authKey, store, ctx, url.origin);
+    }
+
+    const owner = path.match(/^\/([^/]+)(\/.*)$/);
+    if (owner && env.SHELF_KEY && owner[1] === env.SHELF_KEY) {
+      return handleAddon(owner[2], await store.get<string>("stremio_auth"), store, ctx, url.origin);
+    }
+    return new Response("Not found", { status: 404 });
   },
 };
