@@ -1,6 +1,6 @@
 // Standalone Worker for the "Я смотрю" Stremio add-on (see src/shelf.ts).
 //
-//   /                              setup page: log in with Stremio, get a personal install link
+//   /                              setup page: confirm via link.stremio.com, get a personal install link
 //   /manifest.json                 unconfigured manifest (Stremio shows "Configure")
 //   /u/<token>/manifest.json       personal add-on; <token> = base64url(Stremio authKey)
 //   /u/<token>/catalog/...         the shelf for that account
@@ -9,7 +9,6 @@
 import { KVStore } from "./store.ts";
 import { BADGE_VERSION, corsPreflight, handleAddon, posterUrl } from "./shelf.ts";
 import { drawBadge } from "./badge.ts";
-import { stremioLogin } from "./stremio.ts";
 import { configurePage } from "./shelf-page.ts";
 
 interface Env {
@@ -58,19 +57,6 @@ async function poster(env: Env, ctx: ExecutionContext, imdb: string, count: numb
   }
 }
 
-async function configure(req: Request, origin: string): Promise<Response> {
-  if (req.method !== "POST") return html(configurePage({ origin }));
-  const form = await req.formData();
-  const email = String(form.get("email") ?? "").trim();
-  const password = String(form.get("password") ?? "");
-  try {
-    const authKey = await stremioLogin(email, password);
-    return html(configurePage({ origin, installUrl: `${origin}/u/${b64url.encode(authKey)}/manifest.json` }));
-  } catch {
-    return html(configurePage({ origin, error: "Не получилось войти: проверьте почту и пароль Stremio." }), 400);
-  }
-}
-
 export default {
   async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     if (req.method === "OPTIONS") return corsPreflight();
@@ -81,7 +67,7 @@ export default {
     const p = path.match(/^(?:\/[^/]+)?\/poster\/(?:(v\d+)\/)?(tt\d+)\/(\d+)\.jpg$/);
     if (p) return poster(env, ctx, p[2], Number(p[3]));
 
-    if (path === "/" || path === "/configure" || /^\/u\/[^/]+\/configure$/.test(path)) return configure(req, url.origin);
+    if (path === "/" || path === "/configure" || /^\/u\/[^/]+\/configure$/.test(path)) return html(configurePage());
     if (path === "/manifest.json") return handleAddon(path, null, store, ctx, url.origin);
 
     const personal = path.match(/^\/u\/([A-Za-z0-9_-]+)(\/.*)$/);
