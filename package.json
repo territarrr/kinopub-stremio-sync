@@ -1,0 +1,24 @@
+{
+  "name": "kinopub-stremio-sync",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "cli": "node src/cli.ts",
+    "upload-state": "node scripts/upload-state.ts",
+    "deploy:sync": "wrangler deploy -c wrangler.local.toml",
+    "deploy:shelf": "wrangler deploy -c wrangler.shelf.local.toml",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250101.0",
+    "@types/jpeg-js": "^0.3.0",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0",
+    "wrangler": "^4.40.0"
+  },
+  "dependencies": {
+    "jpeg-js": "0.4.4"
+  },
+  "description": "Kinopub ⇄ Stremio watch-state sync and a 'Я смотрю' shelf add-on for Stremio, on Cloudflare Workers",
+  "license": "MIT"
+}

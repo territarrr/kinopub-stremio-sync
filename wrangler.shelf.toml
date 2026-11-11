@@ -1,0 +1,10 @@
+# Standalone "Я смотрю" Stremio add-on (Stremio library + Cinemeta only).
+# Deploy: npx wrangler deploy -c wrangler.shelf.local.toml (copy of this file with your KV id)
+name = "stremio-watching-shelf"
+main = "src/shelf-worker.ts"
+compatibility_date = "2025-10-01"
+compatibility_flags = ["nodejs_compat"] # jpeg-js uses Buffer
+
+[[kv_namespaces]]
+binding = "SHELF"
+id = "<KV_NAMESPACE_ID>"

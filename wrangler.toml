@@ -1,0 +1,12 @@
+name = "kinopub-stremio-sync"
+main = "src/worker.ts"
+compatibility_date = "2025-10-01"
+
+[triggers]
+crons = ["*/5 * * * *"]
+
+# KV namespace holding tokens, sync snapshot and run log.
+# Put the real id into wrangler.local.toml (gitignored) and deploy with -c wrangler.local.toml
+[[kv_namespaces]]
+binding = "STATE"
+id = "<KV_NAMESPACE_ID>"
