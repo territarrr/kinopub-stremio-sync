@@ -26,11 +26,18 @@ const json = (body: unknown, maxAge = 0) =>
   });
 
 /** Bump when the badge look changes, so clients and KV fetch fresh images. */
-export const BADGE_VERSION = "v2";
+export const BADGE_VERSION = "v3";
 
 export const posterUrl = (imdb: string) => `https://images.metahub.space/poster/small/${imdb}/img`;
 
 export const corsPreflight = () => new Response(null, { headers: cors });
+
+function episodes(n: number): string {
+  const m10 = n % 10, m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return `${n} серия`;
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return `${n} серии`;
+  return `${n} серий`;
+}
 
 function plural(n: number): string {
   const m10 = n % 10, m100 = n % 100;
@@ -151,9 +158,10 @@ export async function handleAddon(
   const metas = rows.map(({ item, unwatched, total, started }) => ({
     id: item._id,
     type: "series",
-    name: started ? `${item.name} · ${plural(unwatched)}` : `${item.name} · не начат`,
-    // started series get a poster with the unwatched count drawn on it (see shelf-worker)
-    poster: started ? `${posterBase}/poster/${BADGE_VERSION}/${item._id}/${unwatched}.jpg` : posterUrl(item._id),
+    name: started ? `${item.name} · ${plural(unwatched)}` : `${item.name} · не начат, ${episodes(total)}`,
+    // poster with the count drawn on it (see shelf-worker): red = unwatched episodes
+    // of a started series, blue ("u" suffix) = released episodes of a not-started one
+    poster: `${posterBase}/poster/${BADGE_VERSION}/${item._id}/${unwatched}${started ? "" : "u"}.jpg`,
     posterShape: "poster",
     description: started ? `Не просмотрено ${unwatched} из ${total} вышедших серий` : `Ещё не начат, вышло серий: ${total}`,
   }));

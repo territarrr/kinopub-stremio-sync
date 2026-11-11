@@ -32,7 +32,11 @@ const GLYPHS: Record<string, Stroke[]> = {
 };
 const GLYPH_W = 10, GLYPH_H = 16, ADVANCE = 13;
 
-const BADGE: number[] = [229, 57, 53]; // red
+export type BadgeStyle = "new" | "unstarted";
+const BADGE_COLORS: Record<BadgeStyle, number[]> = {
+  new: [229, 57, 53], // red: started series with unwatched episodes
+  unstarted: [41, 98, 255], // blue: series not started yet (count = released episodes)
+};
 const TEXT: number[] = [255, 255, 255];
 
 function segDist(px: number, py: number, a: Pt, b: Pt): number {
@@ -42,7 +46,8 @@ function segDist(px: number, py: number, a: Pt, b: Pt): number {
   return Math.hypot(px - (a[0] + t * dx), py - (a[1] + t * dy));
 }
 
-export function drawBadge(jpegBytes: Uint8Array, count: number): Uint8Array {
+export function drawBadge(jpegBytes: Uint8Array, count: number, style: BadgeStyle = "new"): Uint8Array {
+  const BADGE = BADGE_COLORS[style];
   const img = jpeg.decode(jpegBytes, { useTArray: true, formatAsRGBA: true });
   const { width: W, height: H, data } = img;
   const text = count > 99 ? "99+" : String(count);
