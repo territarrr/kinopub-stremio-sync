@@ -153,6 +153,12 @@ async function reconcile(
   const kpAdd = [...kv.watched].filter((x) => !snap.has(x));
   let kpDel = [...snap].filter((x) => !kv.watched.has(x));
   const stAdd = sv ? [...sv.watched].filter((x) => !snap.has(x)) : [];
+  // Played to the credits in Stremio: its player resets the position to 0 (or jumps to
+  // the next episode with offset 1) but only marks the episode watched if >70% was
+  // played in that session. If that happened after kinopub's last resume point for the
+  // same episode, count the episode as watched.
+  const finished = finishedInStremio(title, item, sv?.lastTs ?? 0, kv.progress);
+  if (finished && !snap.has(finished) && !stAdd.includes(finished)) stAdd.push(finished);
   let stDel = sv && item ? [...snap].filter((x) => !sv.watched.has(x)) : [];
   if (kpDel.length > MAX_REMOVALS) {
     msgs.push(`кинопаб снял отметку сразу с ${kpDel.length} серий — игнорирую`);
@@ -169,6 +175,9 @@ async function reconcile(
   // ---- resume point: newest wins ----
   const candidates = [kv.progress, sv?.progress].filter((p): p is Progress => !!p && !final.has(p.videoId));
   const winner = candidates.sort((a, b) => b.ts - a.ts)[0] ?? null;
+  // only copy a resume point onto a side that has had no activity since
+  const kpWinsOver = (p: Progress) => p.ts > (sv?.lastTs ?? 0);
+  const stWinsOver = (p: Progress) => p.ts > kv.lastTs;
   const differs = (p: Progress | null | undefined) =>
     !p || p.videoId !== winner!.videoId || Math.abs(p.offset - winner!.offset) > PROGRESS_TOLERANCE;
 
@@ -182,7 +191,7 @@ async function reconcile(
     if (!dryRun) await kp.setWatched(entry.kpId, season, video, watched);
     msgs.push(`кинопаб: ${label(vid)} ${watched ? "просмотрено" : "не просмотрено"}`);
   }
-  if (winner && winner !== kv.progress && differs(kv.progress)) {
+  if (winner && winner !== kv.progress && stWinsOver(winner) && differs(kv.progress)) {
     const { season, video } = parseVideo(winner.videoId);
     if (!dryRun) await kp.markTime(entry.kpId, season, video, winner.offset);
     msgs.push(`кинопаб: ${label(winner.videoId)} позиция ${Math.round(winner.offset / 60)} мин`);
@@ -190,12 +199,12 @@ async function reconcile(
 
   // ---- write to Stremio ----
   if (!removedInStremio) {
-    const progressToStremio = winner && winner !== sv?.progress && differs(sv?.progress);
+    const progressToStremio = !!winner && winner !== sv?.progress && kpWinsOver(winner) && differs(sv?.progress);
     if (!sv || !same(final, sv.watched) || progressToStremio || !item) {
       const target = item ? structuredClone(item) : newLibraryItem(title.imdb, title.type, title.meta.name, title.meta.poster ?? null);
       await applyToStremio(target, title, {
         watched: final,
-        progress: winner,
+        progress: winner && (winner === sv?.progress || kpWinsOver(winner)) ? winner : (sv?.progress ?? null),
         lastTs: Math.max(kv.lastTs, sv?.lastTs ?? 0),
       });
       changes.push(target);
@@ -213,3 +222,13 @@ async function reconcile(
   return msgs;
 }
 
+/** Episode that Stremio played to the end after kinopub's last resume point, if any. */
+export function finishedInStremio(title: Title, item: LibraryItem | undefined, stLastTs: number, kp: Progress | null): string | null {
+  if (!item || item.removed || !kp || stLastTs <= kp.ts) return null;
+  const { video_id, timeOffset } = item.state;
+  if (title.type === "movie") return video_id === kp.videoId && timeOffset === 0 ? kp.videoId : null;
+  if (video_id === kp.videoId && timeOffset < 1000) return kp.videoId; // reset to 0 at the credits
+  const next = title.videoIds[title.videoIds.indexOf(kp.videoId) + 1];
+  if (next && video_id === next && timeOffset <= 1) return kp.videoId; // advanced to the next episode
+  return null;
+}
