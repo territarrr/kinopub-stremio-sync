@@ -5,6 +5,9 @@ main = "src/shelf-worker.ts"
 compatibility_date = "2025-10-01"
 compatibility_flags = ["nodejs_compat"] # jpeg-js uses Buffer
 
+[triggers]
+crons = ["0 */12 * * *"] # owner's series: clear stale "watched" checks
+
 [[kv_namespaces]]
 binding = "SHELF"
 id = "<KV_NAMESPACE_ID>"

@@ -6,8 +6,9 @@
 //   /u/<token>/catalog/...         the shelf for that account
 //   /poster/<ver>/<imdb>/<n>[u].jpg poster with the count badge (u = not started, blue)
 //   /<SHELF_KEY>/...               owner's legacy URLs, authKey taken from KV
+//   cron (every 12h)               owner only: clear the "watched" check on series with new episodes
 import { KVStore } from "./store.ts";
-import { BADGE_VERSION, corsPreflight, handleAddon, posterUrl } from "./shelf.ts";
+import { BADGE_VERSION, clearStaleWatchedChecks, corsPreflight, handleAddon, posterUrl } from "./shelf.ts";
 import { drawBadge, type BadgeStyle } from "./badge.ts";
 import { configurePage } from "./shelf-page.ts";
 
@@ -58,6 +59,15 @@ async function poster(env: Env, ctx: ExecutionContext, imdb: string, count: numb
 }
 
 export default {
+  // cron: remove the stale "watched" check from the owner's series that got new episodes
+  async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    const store = new KVStore(env.SHELF);
+    const authKey = await store.get<string>("stremio_auth");
+    if (!authKey) return;
+    const cleared = await clearStaleWatchedChecks(authKey, store);
+    ctx.waitUntil(env.SHELF.put("uncheck_log", JSON.stringify({ at: new Date().toISOString(), cleared })));
+  },
+
   async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     if (req.method === "OPTIONS") return corsPreflight();
     const url = new URL(req.url);

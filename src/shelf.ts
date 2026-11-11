@@ -116,6 +116,34 @@ async function countUnwatched(item: LibraryItem, eps: [number, number, number][]
   };
 }
 
+/** Series from `library` with released unwatched episodes (episode lists cached in `store`). */
+async function unwatchedRows(library: LibraryItem[], store: Store, defer: (p: Promise<unknown>) => void): Promise<Row[]> {
+  const cache = (await store.get<EpisodeCache>("episodes")) ?? {};
+  if (await refreshEpisodes(cache, library.map((i) => i._id), MAX_FETCH)) defer(store.put("episodes", cache));
+  return (
+    await Promise.all(library.filter((i) => cache[i._id]).map((i) => countUnwatched(i, cache[i._id].v)))
+  ).filter((r): r is Row => !!r);
+}
+
+/**
+ * Stremio draws the "watched" check on a series while state.timesWatched > 0 and never
+ * resets it when new episodes come out. Zero it for series that have released unwatched
+ * episodes; watched episodes and the resume point are left untouched.
+ */
+export async function clearStaleWatchedChecks(authKey: string, store: Store): Promise<string[]> {
+  const api = new Stremio(authKey);
+  const library = (await api.library()).filter((i) => i.type === "series" && !i.removed);
+  const pending: Promise<unknown>[] = [];
+  const rows = await unwatchedRows(library, store, (p) => pending.push(p));
+  const now = new Date().toISOString();
+  const changes = rows
+    .filter((r) => r.item.state.timesWatched > 0)
+    .map(({ item }) => ({ ...item, _mtime: now, state: { ...item.state, timesWatched: 0 } }));
+  if (changes.length) await api.put(changes);
+  await Promise.all(pending);
+  return changes.map((c) => c.name);
+}
+
 /**
  * Handles add-on paths (`/manifest.json`, `/catalog/...`) for one Stremio account.
  * `authKey` null = unconfigured public manifest (Stremio then offers "Configure").
@@ -145,14 +173,7 @@ export async function handleAddon(
     return json({ metas: [] }); // expired / invalid key: show an empty shelf instead of an error
   }
 
-  const cache = (await store.get<EpisodeCache>("episodes")) ?? {};
-  if (await refreshEpisodes(cache, library.map((i) => i._id), MAX_FETCH)) {
-    ctx.waitUntil(store.put("episodes", cache));
-  }
-
-  const rows = (
-    await Promise.all(library.filter((i) => cache[i._id]).map((i) => countUnwatched(i, cache[i._id].v)))
-  ).filter((r): r is Row => !!r);
+  const rows = await unwatchedRows(library, store, (p) => ctx.waitUntil(p));
   rows.sort((a, b) => b.sortKey - a.sortKey);
 
   const metas = rows.map(({ item, unwatched, total, started }) => ({
