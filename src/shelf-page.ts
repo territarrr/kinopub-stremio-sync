@@ -17,7 +17,7 @@ h1{font-size:22px;margin:0 0 6px}.muted{color:var(--muted);font-size:14px}
 .btn{display:inline-block;padding:11px 18px;font:inherit;font-weight:600;color:#fff;background:var(--accent);border:0;border-radius:10px;text-decoration:none;cursor:pointer}
 input{display:block;width:100%;margin:8px 0;padding:10px 12px;font:13px/1.4 inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:10px}
 .err{color:var(--err)}.warn{font-size:14px;color:var(--muted);border-left:3px solid var(--accent);padding-left:10px}
-[hidden]{display:none!important}
+[hidden]{display:none!important}button.btn:disabled{opacity:.6}details{margin:12px 0}summary{cursor:pointer}
 </style></head><body><main>
 <h1>Я смотрю</h1>
 <p class="muted">Полка на главной Stremio: сериалы из вашей библиотеки, где есть непросмотренные серии, с их числом на постере.</p>
@@ -32,11 +32,14 @@ input{display:block;width:100%;margin:8px 0;padding:10px 12px;font:13px/1.4 inhe
 </section>
 
 <section id="step-done" hidden>
-  <p>2. Готово — установите аддон:</p>
-  <p><a id="install" class="btn">Установить в Stremio</a></p>
-  <p class="muted">Если кнопка не открыла Stremio, скопируйте ссылку и вставьте её в поиск в разделе «Аддоны»:</p>
-  <input id="url" readonly onclick="this.select()">
-  <p class="warn">Это личная ссылка: в ней ключ доступа к вашему аккаунту Stremio (так работают все аддоны, которым нужна библиотека). Не делитесь ею. Если ключ утёк — выйдите из Stremio на всех устройствах, и он перестанет работать.</p>
+  <p>2. Вход подтверждён. Установите полку — она встанет первой на главной:</p>
+  <p><button id="install" class="btn">Установить в Stremio</button></p>
+  <p id="installed" hidden><b>Готово!</b> Полка «Я смотрю» добавлена в ваш аккаунт первой в списке аддонов. Полностью закройте Stremio на телефоне и телевизоре и откройте снова — она появится сверху главного экрана.</p>
+  <details class="muted"><summary>Установить вручную</summary>
+    <p>Вставьте ссылку в поиск в разделе «Аддоны» (так полка встанет в конец списка, её можно перетащить наверх):</p>
+    <input id="url" readonly onclick="this.select()">
+  </details>
+  <p class="warn">Ссылка аддона личная: в ней ключ доступа к вашему аккаунту Stremio (так работают все аддоны, которым нужна библиотека). Не делитесь ею. Если ключ утёк — выйдите из Stremio на всех устройствах, и он перестанет работать.</p>
 </section>
 
 <p id="error" class="err" hidden></p>
@@ -45,6 +48,30 @@ input{display:block;width:100%;margin:8px 0;padding:10px 12px;font:13px/1.4 inhe
 const $ = (id) => document.getElementById(id);
 const LINK = "https://link.stremio.com/api/v2";
 const b64url = (str) => btoa(str).split("+").join("-").split("/").join("_").split("=").join("");
+// Adds the add-on to the account's addon collection at position 0 (top of the
+// home screen), replacing an older copy of this add-on if there is one.
+async function install(authKey, url) {
+  const btn = $("install");
+  btn.disabled = true; btn.textContent = "Устанавливаю…";
+  const api = (method, body) =>
+    fetch("https://api.strem.io/api/" + method, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(Object.assign({ authKey }, body)),
+    }).then((r) => r.json());
+  try {
+    const manifest = await fetch(url).then((r) => r.json());
+    const got = await api("addonCollectionGet", { update: true });
+    if (!got.result) throw new Error("get");
+    const rest = got.result.addons.filter((a) => a.manifest.id !== manifest.id && a.transportUrl !== url);
+    const entry = { transportUrl: url, transportName: "http", manifest, flags: { official: false, protected: false } };
+    const set = await api("addonCollectionSet", { addons: [entry].concat(rest) });
+    if (!set.result || !set.result.success) throw new Error("set");
+    btn.hidden = true; $("installed").hidden = false;
+  } catch (e) {
+    btn.disabled = false; btn.textContent = "Установить в Stremio";
+    $("error").hidden = false; $("error").textContent = "Не получилось установить автоматически. Попробуйте ещё раз или установите вручную по ссылке ниже.";
+  }
+}
 async function start() {
   try {
     const r = (await fetch(LINK + "/create?type=Create").then((r) => r.json())).result;
@@ -57,8 +84,8 @@ async function start() {
       const authKey = res && res.result && res.result.authKey;
       if (authKey) {
         const url = location.origin + "/u/" + b64url(authKey) + "/manifest.json";
-        $("step-link").hidden = true; $("step-done").hidden = false;
-        $("install").href = url.replace(/^https?:/, "stremio:"); $("url").value = url;
+        $("step-link").hidden = true; $("step-done").hidden = false; $("url").value = url;
+        $("install").onclick = () => install(authKey, url);
       } else setTimeout(poll, 3000);
     };
     poll();
