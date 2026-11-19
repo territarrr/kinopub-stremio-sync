@@ -9,7 +9,7 @@
 import { isSeriesType, type Kinopub } from "./kinopub.ts";
 import { Stremio, cinemeta, newLibraryItem, type LibraryItem } from "./stremio.ts";
 import { applyToStremio, kpView, makeTitle, stremioView, type Progress, type Title } from "./model.ts";
-import { collectSources, emptyState, resolveTitle, type SyncEntry, type SyncState } from "./migrate.ts";
+import { collectSources, emptyState, resolveTitle, type PendingItem, type SyncEntry, type SyncState } from "./migrate.ts";
 import type { Store } from "./store.ts";
 
 export interface SyncOptions {
@@ -19,6 +19,7 @@ export interface SyncOptions {
 }
 
 const BOOKMARKS_EVERY_MS = 60 * 60 * 1000;
+const HISTORY_PAGES_PER_RUN = 6; // history scan for new installs: 50 entries per page
 /** More removals than this at once on one side looks like a glitch, not a user action. */
 const MAX_REMOVALS = 3;
 const PROGRESS_TOLERANCE = 30; // seconds
@@ -27,6 +28,15 @@ function parseVideo(id: string): { season?: number; video: number } {
   const m = id.match(/:(\d+):(\d+)$/);
   return m ? { season: Number(m[1]), video: Number(m[2]) } : { video: 1 };
 }
+
+const lite = (i: PendingItem): PendingItem => ({
+  id: i.id,
+  title: i.title,
+  type: i.type,
+  imdb: i.imdb,
+  subscribed: i.subscribed,
+  in_watchlist: i.in_watchlist,
+});
 
 const same = (a: Set<string>, b: Set<string>) => a.size === b.size && [...a].every((x) => b.has(x));
 const label = (id: string) => id.replace(/^tt\d+:?/, "").replace(/^(\d+):(\d+)$/, "S$1E$2") || "фильм";
@@ -45,7 +55,11 @@ export async function runSync(store: Store, kp: Kinopub, stremio: Stremio, opts:
 
   // ---- find what changed --------------------------------------------------
   const dirty = new Set<string>(); // imdb ids
-  const newKp = new Map<number, { id: number; title: string; type: string; imdb?: number | null }>();
+  const newKp = new Map<number, PendingItem>();
+  // leftovers of earlier runs first
+  for (const p of Object.values(state.pending ?? {})) if (!byKpId.has(p.id) && !state.skipped[p.id]) newKp.set(p.id, p);
+  const want = (it: PendingItem) =>
+    !byKpId.has(it.id) && !state.skipped[it.id] && (!isSeriesType(it.type) || it.subscribed || it.in_watchlist);
 
   const history = await kp.history(50);
   let cursor = state.kpCursor;
@@ -54,9 +68,7 @@ export async function runSync(store: Store, kp: Kinopub, stremio: Stremio, opts:
     cursor = Math.max(cursor, h.last_seen);
     const known = byKpId.get(h.item.id);
     if (known) dirty.add(known);
-    else if (!state.skipped[h.item.id] && (!isSeriesType(h.item.type) || h.item.subscribed || h.item.in_watchlist)) {
-      newKp.set(h.item.id, h.item);
-    }
+    else if (want(h.item)) newKp.set(h.item.id, lite(h.item));
   }
 
   const serials = await kp.subscribedSerials();
@@ -64,28 +76,46 @@ export async function runSync(store: Store, kp: Kinopub, stremio: Stremio, opts:
     const known = byKpId.get(s.id);
     if (known) {
       if (state.kpCounts[s.id] !== s.watched) dirty.add(known);
-    } else if (!state.skipped[s.id]) newKp.set(s.id, s);
+    } else if (!state.skipped[s.id]) newKp.set(s.id, lite(s));
   }
 
   if (Date.now() - state.bookmarksCheckedAt > BOOKMARKS_EVERY_MS) {
     const sources = await collectSources(kp, { bookmarks: true });
     for (const { item } of sources.values()) {
-      if (!byKpId.has(item.id) && !state.skipped[item.id]) newKp.set(item.id, item);
+      if (!byKpId.has(item.id) && !state.skipped[item.id]) newKp.set(item.id, lite(item));
     }
     state.bookmarksCheckedAt = Date.now();
   }
 
+  // new installs: walk the whole history a few pages per run (series in "Я смотрю"
+  // without new episodes are only visible there)
+  if (state.historyScan) {
+    for (let n = 0; n < HISTORY_PAGES_PER_RUN && state.historyScan; n++) {
+      const body = await kp.get("history", { page: state.historyScan.page, perpage: 50 });
+      for (const h of body.history ?? []) if (isSeriesType(h.item.type) && want(h.item)) newKp.set(h.item.id, lite(h.item));
+      const total = Number(body.pagination?.total ?? 1);
+      if (state.historyScan.page >= total || !body.history?.length) delete state.historyScan;
+      else state.historyScan.page++;
+    }
+  }
+
   for (const [imdb, e] of Object.entries(state.items)) {
     const li = library.get(imdb);
-    if (li && !li.removed && (!e.stMtime || li._mtime > e.stMtime)) dirty.add(imdb);
+    // never synced yet (e.g. added last run, but the budget ran out before it reached
+    // Stremio), or changed in Stremio since
+    if (!e.stMtime || (li && !li.removed && li._mtime > e.stMtime)) dirty.add(imdb);
   }
 
   log(`изменилось: ${dirty.size}, новых в кинопабе: ${newKp.size}`);
 
   // ---- new kinopub titles -> add to Stremio -------------------------------
   const changes: LibraryItem[] = [];
+  const pending: Record<string, PendingItem> = {};
   for (const item of newKp.values()) {
-    if (used() > budget - 4) break;
+    if (used() > budget - 4) {
+      pending[item.id] = item; // budget ran out: next run
+      continue;
+    }
     const title = await resolveTitle(kp, item as any);
     extRequests++; // cinemeta
     if (typeof title === "string") {
@@ -111,7 +141,10 @@ export async function runSync(store: Store, kp: Kinopub, stremio: Stremio, opts:
     try {
       const meta = await cinemeta(entry.type, imdb);
       extRequests++;
-      if (!meta) continue;
+      if (!meta) {
+        entry.stMtime ??= new Date(0).toISOString(); // don't retry every run
+        continue;
+      }
       const title = makeTitle(imdb, entry.type, meta);
       const msgs = await reconcile(title, entry, kp, library.get(imdb), changes, opts.dryRun ?? false);
       for (const m of msgs) report.push(`${meta.name}: ${m}`);
@@ -121,6 +154,11 @@ export async function runSync(store: Store, kp: Kinopub, stremio: Stremio, opts:
       deferred++;
     }
   }
+
+  const waiting = Object.keys(pending).length;
+  if (waiting) state.pending = pending;
+  else delete state.pending;
+  if (waiting) report.push(`ещё не добавлено из кинопаба: ${waiting}`);
 
   if (!opts.dryRun) {
     if (changes.length) await stremio.put(changes);

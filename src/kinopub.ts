@@ -98,9 +98,18 @@ export async function pollDeviceAuth(code: string): Promise<KpTokens | null> {
   try {
     return toTokens(await oauth("device", { grant_type: "device_token", code }));
   } catch (e: any) {
-    if (e.code === "authorization_pending") return null;
+    if (e.code === "authorization_pending" || e.code === "slow_down") return null;
     throw e;
   }
+}
+
+/** Names the device in the kinopub account's device list (best effort). */
+export async function notifyDevice(accessToken: string, title: string): Promise<void> {
+  const qs = new URLSearchParams({ title, hardware: "Cloudflare Worker", software: "kinopub-stremio-sync" });
+  await fetch(`${API}/v1/device/notify?${qs}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "User-Agent": UA },
+  }).catch(() => {});
 }
 
 export class Kinopub {

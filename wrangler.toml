@@ -5,8 +5,9 @@ compatibility_date = "2025-10-01"
 [triggers]
 crons = ["*/5 * * * *"]
 
-# KV namespace holding tokens, sync snapshot and run log.
-# Put the real id into wrangler.local.toml (gitignored) and deploy with -c wrangler.local.toml
+# KV namespace holding tokens, sync snapshot and run log. No id: Cloudflare creates it
+# on the first deploy (Deploy button / `wrangler deploy`). For a manual setup with your own
+# namespace, copy this file to wrangler.local.toml (gitignored), add `id = "…"` and deploy
+# with -c wrangler.local.toml.
 [[kv_namespaces]]
 binding = "STATE"
-id = "<KV_NAMESPACE_ID>"

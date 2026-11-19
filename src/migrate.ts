@@ -17,9 +17,27 @@ export interface SyncState {
   kpCounts: Record<string, number>; // kpId -> watched episode count from watching/serials
   bookmarksCheckedAt: number; // ms
   skipped: Record<string, string>; // kpId -> reason (no imdb / no cinemeta)
+  /** kinopub titles found but not yet added (a run's request budget ran out), by kpId */
+  pending?: Record<string, PendingItem>;
+  /**
+   * Gradual scan of the whole kinopub watch history, for installs set up in the browser
+   * instead of the CLI import: finds "Я смотрю" series without new episodes, which only
+   * the history reveals. Absent once done (and for CLI-imported states).
+   */
+  historyScan?: { page: number };
 }
 
-export const emptyState = (): SyncState => ({ items: {}, kpCursor: 0, kpCounts: {}, bookmarksCheckedAt: 0, skipped: {} });
+export type PendingItem = Pick<KpItem, "id" | "title" | "type" | "imdb" | "subscribed" | "in_watchlist">;
+
+export const emptyState = (): SyncState => ({
+  items: {},
+  kpCursor: 0,
+  kpCounts: {},
+  bookmarksCheckedAt: 0,
+  skipped: {},
+  pending: {},
+  historyScan: { page: 1 },
+});
 
 export interface Source {
   item: KpItem;

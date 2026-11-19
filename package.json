@@ -20,5 +20,12 @@
     "jpeg-js": "0.4.4"
   },
   "description": "Kinopub ⇄ Stremio watch-state sync and a 'Я смотрю' shelf add-on for Stremio, on Cloudflare Workers",
-  "license": "MIT"
+  "license": "MIT",
+  "cloudflare": {
+    "bindings": {
+      "STATUS_KEY": {
+        "description": "Ключ доступа: любая длинная случайная строка, например из генератора паролей (20+ символов, латиница и цифры). Он будет частью адреса страницы настройки и аддона — по нему же можно смотреть по вашей подписке, никому его не показывайте."
+      }
+    }
+  }
 }

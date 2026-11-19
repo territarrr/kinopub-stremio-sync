@@ -80,6 +80,26 @@ export class Stremio {
   }
 }
 
+/**
+ * Adds (or refreshes) an add-on in the account's addon collection, which every Stremio
+ * app syncs. Appended at the end unless an older copy is already there (kept in place).
+ */
+export async function installAddon(authKey: string, manifestUrl: string): Promise<void> {
+  const manifest: any = await (await fetch(manifestUrl)).json();
+  const got = await call("addonCollectionGet", { authKey, update: true });
+  const addons: any[] = got.addons ?? [];
+  const entry = { transportUrl: manifestUrl, transportName: "http", manifest, flags: { official: false, protected: false } };
+  const i = addons.findIndex((a) => a.manifest?.id === manifest.id || a.transportUrl === manifestUrl);
+  if (i >= 0) addons[i] = entry;
+  else addons.push(entry);
+  await call("addonCollectionSet", { authKey, addons });
+}
+
+export async function isAddonInstalled(authKey: string, manifestUrl: string): Promise<boolean> {
+  const got = await call("addonCollectionGet", { authKey, update: true });
+  return (got.addons ?? []).some((a: any) => a.transportUrl === manifestUrl);
+}
+
 export async function cinemeta(type: "series" | "movie", id: string): Promise<CinemetaMeta | null> {
   const res = await fetch(`${CINEMETA}/meta/${type}/${id}.json`);
   if (!res.ok) return null;
