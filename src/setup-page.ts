@@ -5,6 +5,8 @@
 
 export interface SetupInfo {
   key: string;
+  fresh: boolean; // key generated just now
+  keyFromKv: boolean; // generated key (not the STATUS_KEY secret)
   kp: boolean;
   stremio: boolean;
   addon: boolean;
@@ -47,7 +49,16 @@ button:disabled{opacity:.6}[hidden]{display:none!important}a{color:var(--accent)
 input{width:100%;padding:9px 11px;font:13px ui-monospace,monospace;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:8px}
 </style></head><body><main>
 <h1>Кинопаб ⇄ Stremio</h1>
-<p class="muted"><small>Ваш личный сервер на вашем аккаунте Cloudflare. Входы и данные хранятся только здесь. Адрес этой страницы с ключом — пароль от неё, не делитесь им.</small></p>
+${
+    i.fresh
+      ? `<section style="border:2px solid var(--accent)"><b>Сохраните адрес этой страницы в закладки.</b><br><small>В нём ваш личный ключ — только так сюда можно попасть. Никому его не показывайте: с ним можно смотреть по вашей подписке.</small></section>`
+      : ""
+  }
+<p class="muted"><small>Ваш личный сервер на вашем аккаунте Cloudflare. Входы и данные хранятся только здесь. Адрес этой страницы с ключом — пароль от неё, не делитесь им.${
+    i.keyFromKv
+      ? " Если потеряете адрес: панель Cloudflare → Storage & databases → Workers KV → хранилище этого воркера → ключ <code>status_key</code>, и откройте <code>/setup?key=…</code> с этим значением."
+      : ""
+  }</small></p>
 
 <section>
   <h2>1. Кинопаб ${done(i.kp)}</h2>

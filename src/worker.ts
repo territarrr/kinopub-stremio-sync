@@ -12,7 +12,9 @@ import { MANIFEST, proxyHls, streamsFor } from "./streams.ts";
 
 interface Env {
   STATE: KVNamespace;
+  /** Optional secret. Without it the key is generated on first visit and kept in KV. */
   STATUS_KEY: string;
+  KEY_FROM_KV?: boolean;
 }
 
 interface RunLog {
@@ -71,9 +73,15 @@ const esc = (s: string) => s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt
 const html = (body: string, status = 200) => new Response(body, { status, headers: { "Content-Type": "text/html; charset=utf-8" } });
 const fail = (error: string, status = 400) => Response.json({ error }, { status });
 
-const NO_KEY_PAGE = `<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+const BAD_KEY_PAGE = `<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Кинопаб ⇄ Stremio</title><style>body{margin:0;padding:24px 16px;font:16px/1.5 system-ui,sans-serif;max-width:520px;margin:auto;color-scheme:light dark}</style></head>
-<body><h1>Почти готово</h1><p>Задайте секрет <code>STATUS_KEY</code> — длинную случайную строку: в панели Cloudflare откройте этот воркер → Settings → Variables and Secrets → Add → Secret. Затем откройте <code>/setup?key=&lt;ваш ключ&gt;</code>.</p></body></html>`;
+<body><h1>Неподходящий ключ</h1><p>Секрет <code>STATUS_KEY</code> должен быть не короче 12 символов: только латиница, цифры, «-» и «_». Замените его в панели Cloudflare (этот воркер → Settings → Variables and Secrets) или удалите — тогда ключ создастся автоматически при следующем открытии.</p></body></html>`;
+
+/** 24 random URL-safe characters (144 bits). */
+function randomKey(): string {
+  const b = crypto.getRandomValues(new Uint8Array(18));
+  return btoa(String.fromCharCode(...b)).replace(/\+/g, "-").replace(/\//g, "_");
+}
 
 /** POST /setup/… handlers; the key is already checked. */
 async function setupAction(env: Env, path: string, req: Request, origin: string): Promise<Response> {
@@ -109,7 +117,7 @@ async function setupAction(env: Env, path: string, req: Request, origin: string)
   return fail("not found", 404);
 }
 
-async function setupInfoPage(env: Env, origin: string): Promise<Response> {
+async function setupInfoPage(env: Env, origin: string, fresh: boolean): Promise<Response> {
   const store = new KVStore(env.STATE);
   const [kp, authKey, state, log] = await Promise.all([
     env.STATE.get("kp_tokens"),
@@ -123,6 +131,8 @@ async function setupInfoPage(env: Env, origin: string): Promise<Response> {
   return html(
     setupPage({
       key: env.STATUS_KEY,
+      fresh,
+      keyFromKv: !!env.KEY_FROM_KV,
       kp: !!kp,
       stremio: !!authKey,
       addon,
@@ -147,20 +157,29 @@ export default {
     );
   },
 
-  async fetch(req: Request, env: Env): Promise<Response> {
+  async fetch(req: Request, baseEnv: Env): Promise<Response> {
     const url = new URL(req.url);
+    // The access key: the STATUS_KEY secret if set, else one generated on the very first
+    // visit (right after "Deploy", Cloudflare's "Visit" button opens "/") and kept in KV.
+    let key = baseEnv.STATUS_KEY;
+    const fromKv = !key;
+    if (!key) key = (await baseEnv.STATE.get("status_key")) ?? "";
+    if (!key) {
+      if (url.pathname !== "/" && url.pathname !== "/setup") return new Response("Not found", { status: 404 });
+      key = randomKey();
+      await baseEnv.STATE.put("status_key", key);
+      return Response.redirect(`${url.origin}/setup?key=${key}&new=1`, 302);
+    }
+    const env: Env = { ...baseEnv, STATUS_KEY: key, KEY_FROM_KV: fromKv };
     const prefix = `/${env.STATUS_KEY}/`;
     if (env.STATUS_KEY && url.pathname.startsWith(prefix)) {
       if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
       return addon(env, url.pathname.slice(prefix.length), url.origin + prefix);
     }
-    if (!env.STATUS_KEY) return url.pathname === "/" ? html(NO_KEY_PAGE) : new Response("Not found", { status: 404 });
-    if (!/^[A-Za-z0-9_-]{12,}$/.test(env.STATUS_KEY)) {
-      return html(NO_KEY_PAGE.replace("Задайте секрет", "Ключ должен быть не короче 12 символов, только латиница, цифры, «-» и «_». Замените секрет"), 500);
-    }
+    if (!/^[A-Za-z0-9_-]{12,}$/.test(env.STATUS_KEY)) return html(BAD_KEY_PAGE, 500);
     if (url.searchParams.get("key") !== env.STATUS_KEY) return new Response("Not found", { status: 404 });
     if (url.pathname.startsWith("/setup/") && req.method === "POST") return setupAction(env, url.pathname, req, url.origin);
-    if (url.pathname === "/setup" || url.pathname === "/") return setupInfoPage(env, url.origin);
+    if (url.pathname === "/setup" || url.pathname === "/") return setupInfoPage(env, url.origin, url.searchParams.has("new"));
     if (url.pathname === "/run" && req.method === "POST") {
       await sync(env);
       return Response.redirect(`${url.origin}/status?key=${env.STATUS_KEY}`, 303);
