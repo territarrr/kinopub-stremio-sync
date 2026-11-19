@@ -1,9 +1,11 @@
 // Cloudflare Worker: runs the two-way sync on a cron schedule.
 // GET /status?key=<STATUS_KEY> shows the last runs (handy from a phone).
+// /<STATUS_KEY>/manifest.json is a Stremio stream add-on that plays from kinopub.
 import { KVStore } from "./store.ts";
 import { Kinopub } from "./kinopub.ts";
 import { Stremio } from "./stremio.ts";
 import { runSync } from "./sync.ts";
+import { MANIFEST, streamsFor } from "./streams.ts";
 
 interface Env {
   STATE: KVNamespace;
@@ -16,13 +18,36 @@ interface RunLog {
   error?: string;
 }
 
+// The cron refreshes the kinopub token well before it expires, so stream requests never
+// need to: refresh tokens rotate, and two concurrent refreshes would log the worker out.
+const REFRESH_AHEAD = 2 * 3600;
+
+const CORS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "*" };
+const json = (body: unknown, maxAge = 0) =>
+  new Response(JSON.stringify(body), {
+    headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": `max-age=${maxAge}`, ...CORS },
+  });
+
+async function addon(env: Env, path: string): Promise<Response> {
+  if (path === "manifest.json") return json(MANIFEST, 3600);
+  const m = path.match(/^stream\/(movie|series)\/([^/]+)\.json$/);
+  if (!m) return new Response("Not found", { status: 404, headers: CORS });
+  try {
+    const streams = await streamsFor(new Kinopub(new KVStore(env.STATE)), env.STATE, m[1], decodeURIComponent(m[2]));
+    return json({ streams, cacheMaxAge: streams.length ? 3600 : 600 });
+  } catch (e: any) {
+    console.error("stream", m[2], e?.message ?? e);
+    return json({ streams: [] });
+  }
+}
+
 async function sync(env: Env): Promise<void> {
   const store = new KVStore(env.STATE);
   const authKey = await store.get<string>("stremio_auth");
   let entry: RunLog;
   try {
     if (!authKey) throw new Error("Stremio не подключён");
-    const lines = await runSync(store, new Kinopub(store), new Stremio(authKey), { budget: 45 });
+    const lines = await runSync(store, new Kinopub(store, REFRESH_AHEAD), new Stremio(authKey), { budget: 45 });
     entry = { at: new Date().toISOString(), lines };
   } catch (e: any) {
     entry = { at: new Date().toISOString(), lines: [], error: String(e?.message ?? e) };
@@ -51,6 +76,11 @@ export default {
 
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
+    const prefix = `/${env.STATUS_KEY}/`;
+    if (env.STATUS_KEY && url.pathname.startsWith(prefix)) {
+      if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
+      return addon(env, url.pathname.slice(prefix.length));
+    }
     if (!env.STATUS_KEY || url.searchParams.get("key") !== env.STATUS_KEY) return new Response("Not found", { status: 404 });
     if (url.pathname === "/run" && req.method === "POST") {
       await sync(env);

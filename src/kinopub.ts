@@ -107,15 +107,18 @@ export class Kinopub {
   store: Store;
   tokens: KpTokens | null = null;
   requests = 0;
+  /** Refresh the access token when it expires within this many seconds. */
+  refreshAhead: number;
 
-  constructor(store: Store) {
+  constructor(store: Store, refreshAhead = 120) {
     this.store = store;
+    this.refreshAhead = refreshAhead;
   }
 
   async token(): Promise<string> {
     if (!this.tokens) this.tokens = await this.store.get<KpTokens>("kp_tokens");
     if (!this.tokens) throw new KpError("kinopub: not logged in");
-    if (this.tokens.expires_at - 120 < Date.now() / 1000) {
+    if (this.tokens.expires_at - this.refreshAhead < Date.now() / 1000) {
       this.requests++;
       this.tokens = toTokens(
         await oauth("token", { grant_type: "refresh_token", refresh_token: this.tokens.refresh_token }),
