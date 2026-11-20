@@ -222,9 +222,12 @@ export const isSeriesType = (type: string) => SERIES_TYPES.has(type);
  * IMDb ids kinopub still has for titles that IMDb merged into another id. Cinemeta keeps
  * a page for the old id, but Torrentio and Stremio's search only know the new one, so
  * the title would show up twice in Stremio (kinopub on one page, torrents on the other).
+ * Only add an id when Torrentio has nothing for it (Happy Face: Torrentio knows only the
+ * old tt15977292, so it stays).
  */
 export const IMDB_ALIASES: Record<string, string> = {
   tt26748649: "tt22091076", // High Potential (2024)
+  tt12851524: "tt11691774", // Only Murders in the Building (2021)
 };
 
 export function imdbId(n: number | null | undefined): string | null {
