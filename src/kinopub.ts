@@ -218,7 +218,17 @@ export class Kinopub {
 const SERIES_TYPES = new Set(["serial", "docuserial", "tvshow"]);
 export const isSeriesType = (type: string) => SERIES_TYPES.has(type);
 
+/**
+ * IMDb ids kinopub still has for titles that IMDb merged into another id. Cinemeta keeps
+ * a page for the old id, but Torrentio and Stremio's search only know the new one, so
+ * the title would show up twice in Stremio (kinopub on one page, torrents on the other).
+ */
+export const IMDB_ALIASES: Record<string, string> = {
+  tt26748649: "tt22091076", // High Potential (2024)
+};
+
 export function imdbId(n: number | null | undefined): string | null {
   if (!n) return null;
-  return `tt${String(n).padStart(7, "0")}`;
+  const id = `tt${String(n).padStart(7, "0")}`;
+  return IMDB_ALIASES[id] ?? id;
 }

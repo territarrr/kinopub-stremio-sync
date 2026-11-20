@@ -6,7 +6,7 @@
 //
 // Work is limited per run (Cloudflare free plan allows 50 outgoing requests per
 // invocation), so only titles that changed are fetched; leftovers wait for next run.
-import { isSeriesType, type Kinopub } from "./kinopub.ts";
+import { IMDB_ALIASES, isSeriesType, type Kinopub } from "./kinopub.ts";
 import { Stremio, cinemeta, newLibraryItem, type LibraryItem } from "./stremio.ts";
 import { applyToStremio, kpView, makeTitle, stremioView, type Progress, type Title } from "./model.ts";
 import { collectSources, emptyState, resolveTitle, type PendingItem, type SyncEntry, type SyncState } from "./migrate.ts";
@@ -52,6 +52,21 @@ export async function runSync(store: Store, kp: Kinopub, stremio: Stremio, opts:
   const stateBefore = JSON.stringify(state);
   const byKpId = new Map(Object.entries(state.items).map(([imdb, e]) => [e.kpId, imdb]));
   const library = new Map((await stremio.library()).map((i) => [i._id, i]));
+  const changes: LibraryItem[] = [];
+
+  // titles synced under an IMDb id that has since been merged into another one: move
+  // them over (the Stremio item is rebuilt under the new id by reconcile, the old one
+  // is removed from the library)
+  for (const [old, now] of Object.entries(IMDB_ALIASES)) {
+    const e = state.items[old];
+    if (!e || state.items[now]) continue;
+    state.items[now] = { kpId: e.kpId, type: e.type, watched: e.watched.map((v) => v.replace(old, now)) };
+    delete state.items[old];
+    byKpId.set(e.kpId, now);
+    const li = library.get(old);
+    if (li && !li.removed) changes.push({ ...structuredClone(li), removed: true, _mtime: new Date().toISOString() });
+    report.push(`${li?.name ?? old}: IMDb ${old} → ${now}`);
+  }
 
   // ---- find what changed --------------------------------------------------
   const dirty = new Set<string>(); // imdb ids
@@ -109,7 +124,6 @@ export async function runSync(store: Store, kp: Kinopub, stremio: Stremio, opts:
   log(`изменилось: ${dirty.size}, новых в кинопабе: ${newKp.size}`);
 
   // ---- new kinopub titles -> add to Stremio -------------------------------
-  const changes: LibraryItem[] = [];
   const pending: Record<string, PendingItem> = {};
   for (const item of newKp.values()) {
     if (used() > budget - 4) {
