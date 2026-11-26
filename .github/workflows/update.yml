@@ -1,0 +1,26 @@
+# Keeps a copy made by the "Deploy to Cloudflare" button up to date: once a day (or via
+# "Run workflow") it copies the original repository over this one and pushes, and
+# Cloudflare redeploys the worker. Kept as is: wrangler.toml (Cloudflare wrote this
+# worker's name and KV id into it) and .github (the workflow token can't change workflows).
+name: Обновление из оригинала
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  update:
+    if: github.repository != 'territarrr/kinopub-stremio-sync'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Копирую оригинал
+        run: |
+          git clone --depth 1 https://github.com/territarrr/kinopub-stremio-sync.git "$RUNNER_TEMP/upstream"
+          rsync -a --delete --exclude .git --exclude .github --exclude wrangler.toml "$RUNNER_TEMP/upstream/" ./
+          git add -A
+          if git diff --cached --quiet; then echo "Уже последняя версия"; exit 0; fi
+          git -c user.name="github-actions[bot]" -c user.email="41898283+github-actions[bot]@users.noreply.github.com" \
+            commit -m "Обновление из territarrr/kinopub-stremio-sync ($(git -C "$RUNNER_TEMP/upstream" rev-parse --short HEAD))"
+          git push
