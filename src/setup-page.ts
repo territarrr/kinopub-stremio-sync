@@ -116,7 +116,7 @@ $("kp-start").onclick = async () => {
   try {
     const d = await post("/setup/kp-start");
     $("kp-idle").hidden = true; $("kp-code").hidden = false; $("kp-user-code").textContent = d.user_code;
-    if (d.verification_uri) { $("kp-link").href = d.verification_uri; $("kp-link").textContent = d.verification_uri.replace(/^https?:\/\//, ""); }
+    if (d.verification_uri) { $("kp-link").href = d.verification_uri; $("kp-link").textContent = d.verification_uri.replace(/^https?:\\/\\//, ""); }
     const until = Date.now() + (d.expires_in || 600) * 1000;
     const poll = async () => {
       if (Date.now() > until) { $("kp-status").textContent = "Код устарел — обновите страницу."; return; }
